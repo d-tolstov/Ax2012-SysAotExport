@@ -1,0 +1,675 @@
+﻿Exportfile for AOT version 1.0 or later
+Formatversion: 1
+
+***Element: CLS
+
+; Microsoft Dynamics AX Class: SysAOTExport_CDT выгружен
+; --------------------------------------------------------------------------------
+  CLSVERSION 1
+  
+  CLASS #SysAOTExport_CDT
+    PROPERTIES
+      Name                #SysAOTExport_CDT
+      Extends             #RunBase
+      RunOn               #Client
+    ENDPROPERTIES
+    
+    METHODS
+      SOURCE #calcSqlObjectMap
+        #// Получаем множество (название объекта SQL --> дата и время модификации)
+        #// для указанного фильтра по типу объекта
+        #Map calcSqlObjectMap(str _objectTypeFilter)
+        #{
+        #    Map                 ret;
+        #
+        #    SysSQLDataList_CDT  sqlData;
+        #    str                 sql;
+        #    str                 elementName;
+        #    utcdatetime         modifiedDateTime;
+        #;
+        #    ret = new Map(Types::String, Types::UtcDateTime);
+        #
+        #    sql = strFmt(@"
+        #        SELECT o.name
+        #             , o.modify_date
+        #          FROM sys.objects o
+        #         INNER JOIN sys.sql_modules m
+        #            ON m.object_id = o.object_id
+        #         WHERE o.type_desc IN (%1)
+        #    ", _objectTypeFilter
+        #    );
+        #
+        #    if (_objectTypeFilter == strFmt("'%1'", this.sqlObjectTypeView()))
+        #    {
+        #        sql += @"
+        #           AND NOT EXISTS (
+        #           SELECT 1
+        #             FROM SQLDICTIONARY d
+        #            WHERE d.FIELDID = 0
+        #              AND d.SQLNAME = o.name
+        #           )
+        #        ";
+        #    }
+        #
+        #    sqlData = SysSQLDataList_CDT::constructDBCurrent_Server(sql);
+        #
+        #    while (sqlData.moveNext())
+        #    {
+        #        elementName         = sqlData.getString(1);
+        #        modifiedDateTime    = sqlData.getDateTime(2);
+        #
+        #        ret.insert(elementName,modifiedDateTime);
+        #    }
+        #
+        #    return ret;
+        #}
+      ENDSOURCE
+      SOURCE #calcUtilMap
+        #// Получаем множество (название объекта аксапты --> дата и время модификации)
+        #// для указанного UtilElementType
+        #Map calcUtilMap(UtilElementType _recordType)
+        #{
+        #    Map             ret;
+        #
+        #    UtilElements    UtilElements;
+        #    container       key;
+        #    utcdatetime     dt;
+        #    str             elementName;
+        #    utcdatetime     modifiedDateTime;
+        #;
+        #    ret = new Map(types::String,types::UtcDateTime);
+        #
+        #    while select UtilElements
+        #        where ( UtilElements.recordType == _recordType
+        #             || ( _recordType == UtilElementType::Class
+        #               && ( UtilElements.recordType == UtilElementType::ClassInstanceMethod
+        #                 || UtilElements.recordType == UtilElementType::ClassStaticMethod
+        #                 || UtilElements.recordType == UtilElementType::ClassInternalHeader )
+        #                )
+        #             || ( _recordType == UtilElementType::Table
+        #               && ( UtilElements.recordType == UtilElementType::TableInstanceMethod
+        #                 || UtilElements.recordType == UtilElementType::TableStaticMethod
+        #                 || UtilElements.recordType == UtilElementType::TableIndex
+        #                 || UtilElements.recordType == UtilElementType::TableField
+        #                 || UtilElements.recordType == UtilElementType::TableMap
+        #                 || UtilElements.recordType == UtilElementType::ViewQuery
+        #                 || UtilElements.recordType == UtilElementType::TableRelation
+        #                 || UtilElements.recordType == UtilElementType::TableInternalHeader
+        #                 || UtilElements.recordType == UtilElementType::TableFieldGroup )
+        #                )
+        #              )
+        #            && (UtilElements.modifiedBy || UtilElements.createdBy)
+        #            && (UtilElements.utilLevel == UtilEntryLevel::cus || UtilElements.utilLevel == UtilEntryLevel::usr)
+        #    {
+        #        switch (UtilElements.recordType)
+        #        {
+        #            case UtilElementType::ClassInstanceMethod :
+        #            case UtilElementType::ClassStaticMethod :
+        #            case UtilElementType::ClassInternalHeader :
+        #                elementName = classId2Name(UtilElements.parentId);
+        #                break;
+        #
+        #            case UtilElementType::TableInstanceMethod :
+        #            case UtilElementType::TableStaticMethod :
+        #            case UtilElementType::TableInternalHeader :
+        #            case UtilElementType::TableField :
+        #            case UtilElementType::TableMap :
+        #            case UtilElementType::ViewQuery :
+        #            case UtilElementType::TableRelation :
+        #            case UtilElementType::TableIndex :
+        #            case UtilElementType::TableFieldGroup :
+        #                elementName = tableId2Name(UtilElements.parentId);
+        #                break;
+        #
+        #            default:
+        #                elementName = UtilElements.name;
+        #                break;
+        #        }
+        #
+        #        dt      = DateTimeUtil::applyTimeZoneOffset(UtilElements.modifiedDateTime ? UtilElements.modifiedDateTime : UtilElements.createdDateTime, Timezone::GMTPLUS0300MOSCOW_STPETERSBURG_VOLGOGRAD);
+        #
+        #        if (ret.exists(elementName))
+        #        {
+        #            modifiedDateTime = ret.lookup(elementName);
+        #            if (modifiedDateTime > dt)
+        #                continue;
+        #        }
+        #
+        #        ret.insert(elementName,dt);
+        #    }
+        #
+        #    return ret;
+        #}
+      ENDSOURCE
+      SOURCE #classDeclaration
+        #// Класс экспорта объектов AOT из слоёв usr и cus в указанную папку
+        #class SysAOTExport_CDT extends RunBase
+        #{
+        #    DialogField     dfXppDir;
+        #    DialogField     dfDeleteFilesNotFoundInAOT;
+        #    DialogField     dfCheckDateTime;
+        #
+        #    FilePath        xppDir;
+        #    Map             currentDirMap;  // Множество (treeNodePath --> currentDir)
+        #    Map             deletedDirMap;  // Множество (treeNodePath --> deletetDir)
+        #    boolean         deleteFilesNotFoundInAOT;
+        #
+        #    Set             treeNodePathSet;
+        #    Set             ignoreTreeNodePathSet;
+        #
+        #    utcdatetime     checkDateTime;
+        #
+        #    #define.CurrentVersion(2)
+        #    #localMacro.CurrentList
+        #        xppDir
+        #      , deleteFilesNotFoundInAOT
+        #      , checkDateTime
+        #    #endmacro
+        #}
+      ENDSOURCE
+      SOURCE #currentDir
+        #// Создаём директорию для указанной ветки только в том случае если в этом возникает необходимость
+        #protected FilePath currentDir(
+        #    str     _treeNodePath
+        #  , boolean _createIfNotExist = true
+        #)
+        #{
+        #    FilePath    currentDir = xppDir + "\\" + _treeNodePath;
+        #;
+        #    if (!_createIfNotExist)
+        #    {
+        #        return currentDir;
+        #    }
+        #
+        #    if (!this.currentDirMap().exists(_treeNodePath))
+        #    {
+        #        if ( !SysFile::fileExists( currentDir,true))
+        #            SysFile::createDirectory(currentDir);
+        #
+        #        this.currentDirMap().insert(_treeNodePath, currentDir);
+        #    }
+        #
+        #    return this.currentDirMap().lookup(_treeNodePath);
+        #}
+      ENDSOURCE
+      SOURCE #currentDirMap
+        #// Множество (treeNodePath --> currentDir)
+        #protected Map currentDirMap()
+        #{
+        #    if (!currentDirMap)
+        #    {
+        #        currentDirMap   = new Map(Types::String, Types::String);
+        #    }
+        #
+        #    return currentDirMap;
+        #}
+      ENDSOURCE
+      SOURCE #deletedDir
+        #// Создаём директорию с удаляемыми объектами для указанной ветки только в том случае если в этом возникает необходимость
+        #protected FilePath deletedDir(str treeNodePath)
+        #{
+        #    FilePath    deletedDir;
+        #;
+        #    if (!this.deletedDirMap().exists(treeNodePath))
+        #    {
+        #        deletedDir  = xppDir + @"\DELETED\" + treeNodePath;
+        #        if ( !SysFile::fileExists( deletedDir,true))
+        #        {
+        #            SysFile::createDirectory(deletedDir);
+        #        }
+        #
+        #        this.deletedDirMap().insert(treeNodePath, deletedDir);
+        #    }
+        #
+        #    return this.deletedDirMap().lookup(treeNodePath);
+        #}
+      ENDSOURCE
+      SOURCE #deletedDirMap
+        #// Множество (treeNodePath --> deletetDir)
+        #protected Map deletedDirMap()
+        #{
+        #    if (!deletedDirMap)
+        #    {
+        #        deletedDirMap   = new Map(Types::String, Types::String);
+        #    }
+        #
+        #    return deletedDirMap;
+        #}
+      ENDSOURCE
+      SOURCE #dialog
+        #protected Object dialog()
+        #{
+        #    Dialog ret;
+        #
+        #    ret = super();
+        #
+        #    dfXppDir                    = ret.addFieldValue( extendedTypeStr(FilePath), xppDir);
+        #    dfDeleteFilesNotFoundInAOT  = ret.addFieldValue( extendedTypeStr(NoYesId), deleteFilesNotFoundInAOT, "Удалить файлы для ненайденных объектов в АОТ");
+        #    dfCheckDateTime             = ret.addFieldValue( extendedTypeStr(ModifiedDateTime), checkDateTime, "", "Экспортироваться в файл будут только те объекты что изменены после указанной даты и времени");
+        #
+        #    return ret;
+        #}
+      ENDSOURCE
+      SOURCE #exportSqlObject
+        #// Сохраняем исходный код объекта SQL в файл в указанную папку
+        #protected boolean exportSqlObject(
+        #    str Name
+        #  , str treeNodePath
+        #)
+        #{
+        #    SysSQLDataList_CDT  sqlData;
+        #    str                 objectContent;
+        #;
+        #    sqlData = SysSQLDataList_CDT::constructDBCurrent_Server(strFmt(@"
+        #        SELECT m.definition
+        #          FROM sys.objects o
+        #         INNER JOIN sys.sql_modules m
+        #            ON m.object_id = o.object_id
+        #         WHERE o.type_desc IN (%1)
+        #           AND o.name = '%2'
+        #    ", this.treeNodePath2SqlObjectTypeFilter(treeNodePath)
+        #     , Name
+        #    ));
+        #
+        #    if (!sqlData.moveNext())
+        #    {
+        #        return checkFailed(strFmt("Для объекта %1 (тип %2) не найдено определение", Name, this.treeNodePath2SqlObjectTypeFilter(treeNodePath)));
+        #    }
+        #
+        #    objectContent   = sqlData.getString(1);
+        #
+        #    System.IO.File::WriteAllText(strFmt("%1\\%2.%3", this.currentDir(treeNodePath), Name, "sql"), objectContent);
+        #
+        #    return true;
+        #}
+      ENDSOURCE
+      SOURCE #getFromDialog
+        #public boolean getFromDialog()
+        #{
+        #    boolean ret;
+        #
+        #    ret = super();
+        #
+        #    if (ret)
+        #    {
+        #        xppDir                      = dfXppDir.value();
+        #        deleteFilesNotFoundInAOT    = dfDeleteFilesNotFoundInAOT.value();
+        #        checkDateTime               = dfCheckDateTime.value();
+        #    }
+        #
+        #    return ret;
+        #}
+      ENDSOURCE
+      SOURCE #ignoreTreeNodePathSet
+        #protected Set ignoreTreeNodePathSet()
+        #{
+        #    if ( !ignoreTreeNodePathSet)
+        #    {
+        #        ignoreTreeNodePathSet  = new Set(Types::String);
+        #
+        #        ignoreTreeNodePathSet.add(@"Reports\Report Templates");
+        #        ignoreTreeNodePathSet.add(@"Reports\Section Templates");
+        #    }
+        #
+        #    return ignoreTreeNodePathSet;
+        #}
+      ENDSOURCE
+      SOURCE #new
+        #public void new()
+        #{
+        #;
+        #    super();
+        #
+        #    checkDateTime = DateTimeUtil::addDays(DateTimeUtil::utcNow(),-10);
+        #}
+      ENDSOURCE
+      SOURCE #pack
+        #container pack()
+        #{
+        #    return [#CurrentVersion,#CurrentList];
+        #}
+      ENDSOURCE
+      SOURCE #run
+        #void run()
+        #{
+        #    #AotExport
+        #
+        #    Enumerator          pathEnumerator;
+        #    TreeNode            pathNode,curNode;
+        #    TempStr             treeNodePath;
+        #    int                 exportFlag;
+        #    FileName            xpoFileName;
+        #    FileName            newDeletedFileName;
+        #    Set                 deletedFileNameSet;
+        #    Enumerator          deletedFileNameEnumerator;
+        #
+        #    utcdatetime         modifiedDateTime;
+        #
+        #    int                 cnt;
+        #    int                 stTime = WinAPI::getTickCount();
+        #    map                 utilMap;
+        #    mapEnumerator       me;
+        #    Name                Name;
+        #    UtilElementType     UtilElementType;
+        #    boolean             isSQLPath;
+        #;
+        #    if ( !this.validate())
+        #    {
+        #        throw Error("Обновления отменены");
+        #    }
+        #
+        #    exportFlag = #export;
+        #    exportFlag += #expKeepIds;
+        #
+        #    setPrefix(this.caption());
+        #
+        #    pathEnumerator  = this.treeNodePathSet().getEnumerator();
+        #    while (pathEnumerator.moveNext())
+        #    {
+        #        // Каталог. Например, Data Dictionary\Extended Data Types или SQL\Stored Procedures
+        #        treeNodePath    = pathEnumerator.current();
+        #
+        #        setprefix(treeNodePath);
+        #
+        #        isSQLPath   = this.treeNodePathIsSql(treeNodePath);
+        #        if (isSQLPath)
+        #        {
+        #            utilMap = this.calcSqlObjectMap(this.treeNodePath2SqlObjectTypeFilter(treeNodePath));
+        #        }
+        #        else
+        #        {
+        #            pathNode    = TreeNode::findNode(treeNodePath);
+        #
+        #            if (pathNode.treeNodeName() == "Reports")
+        #            {
+        #                UtilElementType = UtilElementType::Report;
+        #            }
+        #            else
+        #            {
+        #                curNode = pathNode.AOTfirstChild();
+        #                UtilElementType = curNode.utilElement().recordType;
+        #            }
+        #
+        #            utilMap = this.calcUtilMap(UtilElementType);
+        #        }
+        #
+        #        me = utilMap.getEnumerator();
+        #        while (me.moveNext())
+        #        {
+        #            Name    = me.currentKey();
+        #
+        #            modifiedDateTime    = me.currentValue();
+        #
+        #            if (modifiedDateTime >= checkDateTime)
+        #            {
+        #                if (isSQLPath)
+        #                {
+        #                    this.exportSqlObject(
+        #                        Name
+        #                      , treeNodePath
+        #                    );
+        #                    cnt++;
+        #                }
+        #                else
+        #                {
+        #                    curNode = pathNode.AOTfindChild(Name);
+        #                    if (!curNode && UtilElementType == UtilElementType::Reference)
+        #                    {
+        #                        curNode = infolog.getNode(UtilElementType,Name);
+        #                    }
+        #
+        #                    if (!curNode && UtilElementType == UtilElementType::Table)
+        #                    {
+        #                        continue;
+        #                    }
+        #
+        #                    if (!curNode)
+        #                    {
+        #                        Warning(strfmt('Элемент "%1" не найден в ветке "%2"', Name, treeNodePath));
+        #                        continue;
+        #                    }
+        #
+        #                    xpoFileName = strFmt("%1\\%2.%3", this.currentDir(treeNodePath), Name, "xpo");
+        #
+        #                    new FileIOPermission(xpoFileName,"rw").assert();
+        #
+        #                    curNode.treeNodeExport( xpoFileName, exportFlag);
+        #
+        #                    cnt++;
+        #                    CodeAccessPermission::revertAssert();
+        #                    curNode = null;
+        #                }
+        #            }
+        #        }
+        #
+        #        // Удаляем лишние файлы. Если для текущей ветки существует директория.
+        #        if ( deleteFilesNotFoundInAOT
+        #          && SysFile::fileExists(this.currentDir(treeNodePath, false), true) )
+        #        {
+        #            // Список названий файлов в текущей директории
+        #            deletedFileNameSet  = SysFile::DirectoryFileNameSet( this.currentDir(treeNodePath), strFmt("*%1", this.treeNodePath2FileExtension(treeNodePath)), false);
+        #
+        #            // Исключаем из списка названий файлов список названий экспортированных объектов
+        #            deletedFileNameSet  = Set::difference(deletedFileNameSet, utilMap.keySet());
+        #
+        #            deletedFileNameEnumerator   = deletedFileNameSet.getEnumerator();
+        #            while (deletedFileNameEnumerator.moveNext())
+        #            {
+        #                newDeletedFileName  = strfmt( @"%1\%2%3", this.deletedDir(treeNodePath), deletedFileNameEnumerator.current(), this.treeNodePath2FileExtension(treeNodePath));
+        #
+        #                if ( SysFile::fileExists(newDeletedFileName))
+        #                    SysFile::deleteFile(newDeletedFileName);
+        #
+        #                SysFile::moveFile(
+        #                    strfmt( @"%1\%2%3", this.currentDir(treeNodePath), deletedFileNameEnumerator.current(), this.treeNodePath2FileExtension(treeNodePath))
+        #                  , newDeletedFileName
+        #                );
+        #            }
+        #        }
+        #    }
+        #
+        #    if (cnt)
+        #    {
+        #        info(strfmt("Выгружено %1 за %2 мс", cnt, WinAPI::getTickCount()-stTime));
+        #    }
+        #}
+      ENDSOURCE
+      SOURCE #sqlObjectTypeView
+        #private str sqlObjectTypeView()
+        #{
+        #    return "VIEW";
+        #}
+      ENDSOURCE
+      SOURCE #treeNodePath2FileExtension
+        #// Для ветки возвращаем расширение файлов
+        #str treeNodePath2FileExtension(str treeNodePath)
+        #{
+        #    if (this.treeNodePathIsSql(treeNodePath))
+        #    {
+        #        return ".sql";
+        #    }
+        #
+        #    return ".xpo";
+        #}
+      ENDSOURCE
+      SOURCE #treeNodePath2SqlObjectTypeFilter
+        #// Для ветки SQL* конвертируем путь в фильтр типа объекта
+        #// Например, для SQL\Scalar-valued Functions возвращаем 'SQL_SCALAR_FUNCTION'
+        #str treeNodePath2SqlObjectTypeFilter(str treeNodePath)
+        #{
+        #    if (!this.treeNodePathIsSql(treeNodePath))
+        #    {
+        #        throw error(Error::wrongUseOfFunction(funcName()));
+        #    }
+        #
+        #    switch (subStr(treeNodePath, 5, strLen(treeNodePath) - 4))
+        #    {
+        #        case "Triggers":
+        #            return "'SQL_TRIGGER'";
+        #
+        #        case "Table-valued Functions":
+        #            return "'SQL_INLINE_TABLE_VALUED_FUNCTION','SQL_TABLE_VALUED_FUNCTION'";
+        #
+        #        case "Scalar-valued Functions":
+        #            return "'SQL_SCALAR_FUNCTION'";
+        #
+        #        case "Stored Procedures":
+        #            return "'SQL_STORED_PROCEDURE'";
+        #
+        #        case "Views":
+        #            return strFmt("'%1'", this.sqlObjectTypeView());
+        #    }
+        #
+        #    throw error(Error::wrongUseOfFunction(funcName()));
+        #}
+      ENDSOURCE
+      SOURCE #treeNodePathIsSql
+        #// Относится ли ветка к объектам SQL
+        #// Например, ветка SQL\Scalar-valued Functions относится
+        #boolean treeNodePathIsSql(str treeNodePath)
+        #{
+        #    return subStr(treeNodePath,1,3) == 'SQL';
+        #}
+      ENDSOURCE
+      SOURCE #treeNodePathSet
+        #protected Set treeNodePathSet()
+        #{
+        #    if ( !treeNodePathSet)
+        #    {
+        #        treeNodePathSet  = new Set(Types::String);
+        #
+        #        treeNodePathSet.add(@"Classes");
+        #
+        #        treeNodePathSet.add(@"Data Dictionary\Base Enums");
+        #        treeNodePathSet.add(@"Data Dictionary\Configuration Keys");
+        #        treeNodePathSet.add(@"Data Dictionary\Extended Data Types");
+        #        treeNodePathSet.add(@"Data Dictionary\Maps");
+        #        treeNodePathSet.add(@"Data Dictionary\Security Keys");
+        #        treeNodePathSet.add(@"Data Dictionary\Table Collections");
+        #        treeNodePathSet.add(@"Data Dictionary\Tables");
+        #        treeNodePathSet.add(@"Data Dictionary\Views");
+        #
+        #        treeNodePathSet.add(@"Data Sets");
+        #        treeNodePathSet.add(@"Forms"); // формы на стороне сервера не доступны
+        #
+        #        treeNodePathSet.add(@"Macros");
+        #        treeNodePathSet.add(@"Menu Items\Display");
+        #        treeNodePathSet.add(@"Menu Items\Output");
+        #        treeNodePathSet.add(@"Menu Items\Action");
+        #
+        #        treeNodePathSet.add(@"Parts\Info Parts");
+        #        treeNodePathSet.add(@"Parts\Form Parts");
+        #
+        #        treeNodePathSet.add(@"Reports");
+        #        treeNodePathSet.add(@"Queries");
+        #        treeNodePathSet.add(@"Menus");
+        #        treeNodePathSet.add(@"Services");
+        #        treeNodePathSet.add(@"Service Groups");
+        #        treeNodePathSet.add(@"Security\Code Permissions");
+        #        treeNodePathSet.add(@"Security\Privileges");
+        #        treeNodePathSet.add(@"Security\Duties");
+        #        treeNodePathSet.add(@"Security\Roles");
+        #        treeNodePathSet.add(@"Security\Process Cycles");
+        #        treeNodePathSet.add(@"Security\Policies");
+        #        treeNodePathSet.add(@"Resources");
+        #        treeNodePathSet.add(@"References");
+        #
+        #        // Объекты в БД, которые создаются и модифицируются не штатными механизмами аксапты
+        #        treeNodePathSet.add(@"SQL\Triggers");
+        #        treeNodePathSet.add(@"SQL\Table-valued Functions");
+        #        treeNodePathSet.add(@"SQL\Scalar-valued Functions");
+        #        treeNodePathSet.add(@"SQL\Stored Procedures");
+        #        treeNodePathSet.add(@"SQL\Views");
+        #    }
+        #
+        #    return treeNodePathSet;
+        #}
+      ENDSOURCE
+      SOURCE #unpack
+        #boolean unpack(container _packedClass)
+        #{
+        #    Integer     version     = conpeek(_packedClass,1);
+        #
+        #    switch (version)
+        #    {
+        #        case #CurrentVersion:
+        #            [version, #CurrentList] = _packedClass;
+        #            break;
+        #        default :
+        #            return false;
+        #    }
+        #
+        #    return true;
+        #}
+      ENDSOURCE
+      SOURCE #validate
+        #boolean validate(Object _calledFrom = null)
+        #{
+        #    if ( !xppDir)
+        #    {
+        #        return CheckFailed("Не указана директория для экспорта!");
+        #    }
+        #
+        #    return SysFile::checkFileExists( xppDir, true);
+        #}
+      ENDSOURCE
+      SOURCE #WithCheckDateTime
+        #SysAOTExport_CDT WithCheckDateTime(utcDateTime _checkDateTime)
+        #{
+        #;
+        #    checkDateTime   = _checkDateTime;
+        #
+        #    return this;
+        #}
+      ENDSOURCE
+      SOURCE #WithDeleteFilesNotFoundInAOT
+        #SysAOTExport_CDT WithDeleteFilesNotFoundInAOT(
+        #    boolean _deleteFilesNotFoundInAOT
+        #)
+        #{
+        #;
+        #    deleteFilesNotFoundInAOT    = _deleteFilesNotFoundInAOT;
+        #    return this;
+        #}
+      ENDSOURCE
+      SOURCE #WithXppDir
+        #SysAOTExport_CDT WithXppDir( str _xppDir)
+        #{
+        #;
+        #    xppDir  = _xppDir;
+        #    return this;
+        #}
+      ENDSOURCE
+      SOURCE #description
+        #static ClassDescription description()
+        #{
+        #    return "Экспорт объектов AOT из слоёв usr и cus в указанную папку";
+        #}
+      ENDSOURCE
+      SOURCE #export
+        #static void export(
+        #    str     _xppDir
+        #  , boolean _deleteFilesNotFoundInAOT = true
+        #)
+        #{
+        #    new SysAOTExport_CDT()
+        #        .WithXppDir(_xppDir)
+        #        .WithDeleteFilesNotFoundInAOT(_deleteFilesNotFoundInAOT)
+        #        .run();
+        #}
+      ENDSOURCE
+      SOURCE #main
+        #static void main(Args _args)
+        #{
+        #    SysAOTExport_CDT    process = new SysAOTExport_CDT();
+        #;
+        #    if (process.prompt())
+        #    {
+        #        process.run();
+        #    }
+        #}
+      ENDSOURCE
+    ENDMETHODS
+  ENDCLASS
+
+***Element: END
