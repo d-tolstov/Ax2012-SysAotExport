@@ -57,6 +57,23 @@ timeout 10
     <Run type="class" name="SysAOTExport_CDT" method="export" parameters="'C:\\Users\\username\\Documents\\AxAOTExport\\AOT'" />
 </AxaptaAutoRun>
 ```
-
+### Файл git_checkout_dev.ps1 для смены ветки в гите
+```
+Set-Location C:\Users\username\Documents\AxAOTExport\AOT
+git checkout -- .
+git checkout dev
+```
+Файлы для остальных веток делаются по аналогии.
+### Файл git_commit.ps1 для вызова комита в гите
+```
+Set-Location C:\Users\username\Documents\AxAOTExport\AOT
+git add --all
+$commitmessage = [System.DateTime]::Now.ToString('yyyy.MM.dd HH:mm')
+$commitmessage
+git commit -m $commitmessage
+git push
+```
+### Пользователь для запуска экспорта
+Для экспорта должен быть выбран отдельный пользователь. В скриптах его доменное имя указано как "username". Так как мы применяем функционал startupcmd и внутри файла xml указываем Run type="class" - этот пользователь должен быть админом в аксапте.
 ## Зависимости от других репозиториев :
 - [SysFile](https://github.com/d-tolstov/Ax2009-SysFile)
