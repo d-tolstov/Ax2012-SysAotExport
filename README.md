@@ -75,5 +75,14 @@ git push
 ```
 ### Пользователь для запуска экспорта
 Для экспорта должен быть выбран отдельный пользователь. В скриптах его доменное имя указано как "username". Так как мы применяем функционал startupcmd и внутри файла xml указываем Run type="class" - этот пользователь должен быть админом в аксапте.
+### Скрипты сравнения веток
+Кол-во отличающихся файлов между ветками, исключая указанные директории  
+`(git diff dev..prod --name-only -- . ':!SQL' ':!DELETED' | Measure-Object).Count`  
+Кол-во отличающихся файлов между ветками в явно указанной директории  
+`(git diff dev..prod --name-only -- 'Security\Duties' | Measure-Object).Count`  
+Кол-во файлов, существующих в первой ветке и отсутствующих во второй ветке  
+`(git diff dev..prod --name-only --diff-filter=D -- . ':!SQL' ':!DELETED' | Measure-Object).Count`  
+Кол-во файлов, существующих во второй ветке и отсутствующих в первой ветке  
+`(git diff dev..prod --name-only --diff-filter=A -- . ':!SQL' ':!DELETED' | Measure-Object).Count`  
 ## Зависимости от других репозиториев :
 - [SysFile](https://github.com/d-tolstov/Ax2009-SysFile)
